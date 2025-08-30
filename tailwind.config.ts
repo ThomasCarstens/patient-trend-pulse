@@ -52,6 +52,22 @@ export default {
 					DEFAULT: 'hsl(var(--card))',
 					foreground: 'hsl(var(--card-foreground))'
 				},
+				status: {
+					green: 'hsl(var(--status-green))',
+					yellow: 'hsl(var(--status-yellow))',
+					red: 'hsl(var(--status-red))',
+					orange: 'hsl(var(--status-orange))'
+				},
+				vital: {
+					normal: 'hsl(var(--vital-normal))',
+					warning: 'hsl(var(--vital-warning))',
+					critical: 'hsl(var(--vital-critical))'
+				},
+				chart: {
+					grid: 'hsl(var(--chart-grid))',
+					line: 'hsl(var(--chart-line))',
+					trend: 'hsl(var(--chart-trend))'
+				},
 				sidebar: {
 					DEFAULT: 'hsl(var(--sidebar-background))',
 					foreground: 'hsl(var(--sidebar-foreground))',

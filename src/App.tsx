@@ -1,27 +1,48 @@
+import { useState } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import Index from "./pages/Index";
-import NotFound from "./pages/NotFound";
+import { PatientRoster } from "@/components/PatientRoster";
+import { TCCCCard } from "@/components/TCCCCard";
+import { RealtimeVitals } from "@/components/RealtimeVitals";
+import { Patient } from "@/data/medicalData";
 
 const queryClient = new QueryClient();
 
-const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
-      <Toaster />
-      <Sonner />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Index />} />
-          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </BrowserRouter>
-    </TooltipProvider>
-  </QueryClientProvider>
-);
+type View = 'roster' | 'tccc' | 'vitals';
+
+const App = () => {
+  const [currentView, setCurrentView] = useState<View>('roster');
+  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
+
+  const handleSelectPatient = (patient: Patient, view: 'tccc' | 'vitals') => {
+    setSelectedPatient(patient);
+    setCurrentView(view);
+  };
+
+  const handleBack = () => {
+    setCurrentView('roster');
+    setSelectedPatient(null);
+  };
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <Toaster />
+        <Sonner />
+        {currentView === 'roster' && (
+          <PatientRoster onSelectPatient={handleSelectPatient} />
+        )}
+        {currentView === 'tccc' && selectedPatient && (
+          <TCCCCard patient={selectedPatient} onBack={handleBack} />
+        )}
+        {currentView === 'vitals' && selectedPatient && (
+          <RealtimeVitals patient={selectedPatient} onBack={handleBack} />
+        )}
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
+};
 
 export default App;
