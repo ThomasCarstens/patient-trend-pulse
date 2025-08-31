@@ -7,6 +7,7 @@ import { PatientRoster } from "@/components/PatientRoster";
 import { TCCCCard } from "@/components/TCCCCard";
 import { RealtimeVitals } from "@/components/RealtimeVitals";
 import { Patient } from "@/data/medicalData";
+import { TCCCProvider } from "@/contexts/TCCCContext";
 
 const queryClient = new QueryClient();
 
@@ -28,19 +29,21 @@ const App = () => {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        {currentView === 'roster' && (
-          <PatientRoster onSelectPatient={handleSelectPatient} />
-        )}
-        {currentView === 'tccc' && selectedPatient && (
-          <TCCCCard patient={selectedPatient} onBack={handleBack} />
-        )}
-        {currentView === 'vitals' && selectedPatient && (
-          <RealtimeVitals patient={selectedPatient} onBack={handleBack} />
-        )}
-      </TooltipProvider>
+      <TCCCProvider>
+        <TooltipProvider>
+          <Toaster />
+          <Sonner />
+          {currentView === 'roster' && (
+            <PatientRoster onSelectPatient={handleSelectPatient} onClose={() => {}} />
+          )}
+          {currentView === 'tccc' && selectedPatient && (
+            <TCCCCard patient={selectedPatient} onBack={handleBack} />
+          )}
+          {currentView === 'vitals' && selectedPatient && (
+            <RealtimeVitals patient={selectedPatient} onBack={handleBack} />
+          )}
+        </TooltipProvider>
+      </TCCCProvider>
     </QueryClientProvider>
   );
 };

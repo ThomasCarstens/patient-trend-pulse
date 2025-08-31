@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
-import { ArrowLeft, Heart, Droplets, Wind, Activity } from "lucide-react";
+import { ArrowLeft, Heart, Droplets, Wind, Activity, Play, Pause } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Patient, VitalSigns } from "@/data/medicalData";
+import { loadAllPatientVitals, getPatientVitals, getCurrentAlertStatus } from "@/utils/csvLoader";
+import { AlertBar } from "@/components/AlertButton";
 
 interface RealtimeVitalsProps {
   patient: Patient;
@@ -12,32 +14,62 @@ interface RealtimeVitalsProps {
 }
 
 export function RealtimeVitals({ patient, onBack }: RealtimeVitalsProps) {
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [patientVitals, setPatientVitals] = useState<VitalSigns[]>(patient.vitals);
+  const [vitalsMap, setVitalsMap] = useState<Map<string, VitalSigns[]>>(new Map());
+
+  // Start with 20% of the data already displayed
+  const initialIndex = Math.floor(patientVitals.length * 0.2);
+  const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [isStreaming, setIsStreaming] = useState(true);
-  const [displayData, setDisplayData] = useState<VitalSigns[]>([]);
+  const [displayData, setDisplayData] = useState<VitalSigns[]>(patientVitals.slice(0, initialIndex + 1));
+
+  // Load CSV data on component mount
+  useEffect(() => {
+    const loadVitalsData = async () => {
+      try {
+        const vitalsMap = await loadAllPatientVitals();
+        setVitalsMap(vitalsMap);
+
+        // Get vitals for this specific patient
+        const csvVitals = getPatientVitals(patient.id, vitalsMap);
+        if (csvVitals.length > 0) {
+          setPatientVitals(csvVitals);
+          const newInitialIndex = Math.floor(csvVitals.length * 0.2);
+          setCurrentIndex(newInitialIndex);
+          setDisplayData(csvVitals.slice(0, newInitialIndex + 1));
+          console.log(`Loaded ${csvVitals.length} vitals for patient ${patient.name}`);
+        }
+      } catch (error) {
+        console.error('Error loading CSV vitals data:', error);
+      }
+    };
+
+    loadVitalsData();
+  }, [patient.id, patient.name]);
 
   useEffect(() => {
     if (!isStreaming) return;
-    
+
+    // Faster interval since we have 10x more data points (100ms instead of 1000ms)
     const interval = setInterval(() => {
       setCurrentIndex((prev) => {
         const newIndex = prev + 1;
-        if (newIndex >= patient.vitals.length) {
+        if (newIndex >= patientVitals.length) {
           setIsStreaming(false);
-          return patient.vitals.length - 1;
+          return patientVitals.length - 1;
         }
         return newIndex;
       });
-    }, 1000);
+    }, 100);
 
     return () => clearInterval(interval);
-  }, [isStreaming, patient.vitals.length]);
+  }, [isStreaming, patientVitals.length]);
 
   useEffect(() => {
-    setDisplayData(patient.vitals.slice(0, currentIndex + 1));
-  }, [currentIndex, patient.vitals]);
+    setDisplayData(patientVitals.slice(0, currentIndex + 1));
+  }, [currentIndex, patientVitals]);
 
-  const currentVitals = patient.vitals[currentIndex];
+  const currentVitals = patientVitals[currentIndex];
   
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -64,12 +96,32 @@ export function RealtimeVitals({ patient, onBack }: RealtimeVitalsProps) {
   const chartData = formatChartData(displayData);
 
   const resetSimulation = () => {
-    setCurrentIndex(0);
+    const initialIndex = Math.floor(patientVitals.length * 0.2);
+    setCurrentIndex(initialIndex);
     setIsStreaming(true);
   };
 
+  const toggleStreaming = () => {
+    if (currentIndex >= patientVitals.length - 1) {
+      // If at the end, reset to 20% and start streaming
+      resetSimulation();
+    } else {
+      // Otherwise just toggle streaming
+      setIsStreaming(!isStreaming);
+    }
+  };
+
+  // Get current alert status
+  const currentAlertColor = getCurrentAlertStatus(displayData);
+  const alerts = [{
+    patientId: patient.id,
+    patientName: patient.name,
+    alertColor: currentAlertColor
+  }];
+
   return (
     <div className="min-h-screen bg-background p-4">
+      <AlertBar alerts={alerts} onAlertClick={() => {}} />
       <div className="max-w-7xl mx-auto">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-4">
@@ -94,14 +146,25 @@ export function RealtimeVitals({ patient, onBack }: RealtimeVitalsProps) {
                 {isStreaming ? 'Streaming' : 'Paused'}
               </span>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={resetSimulation}
-              className="border-accent text-accent hover:bg-accent hover:text-accent-foreground"
-            >
-              Reset
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={toggleStreaming}
+                className="border-primary text-primary hover:bg-primary hover:text-primary-foreground"
+              >
+                {isStreaming ? <Pause className="w-4 h-4 mr-1" /> : <Play className="w-4 h-4 mr-1" />}
+                {isStreaming ? 'Pause' : 'Play'}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={resetSimulation}
+                className="border-accent text-accent hover:bg-accent hover:text-accent-foreground"
+              >
+                Reset
+              </Button>
+            </div>
           </div>
         </div>
 
@@ -205,36 +268,37 @@ export function RealtimeVitals({ patient, onBack }: RealtimeVitalsProps) {
                     stroke="hsl(var(--muted-foreground))"
                     fontSize={12}
                   />
-                  <Tooltip 
+                  <Tooltip
                     contentStyle={{
                       backgroundColor: 'hsl(var(--card))',
                       border: '1px solid hsl(var(--border))',
                       borderRadius: '8px'
                     }}
                   />
-                  <Line 
-                    type="monotone" 
-                    dataKey="pulse" 
-                    stroke="hsl(var(--status-red))" 
-                    strokeWidth={2}
+                  <Legend />
+                  <Line
+                    type="monotone"
+                    dataKey="pulse"
+                    stroke="#ef4444"
+                    strokeWidth={3}
                     dot={false}
-                    name="Heart Rate"
+                    name="Heart Rate (BPM)"
                   />
-                  <Line 
-                    type="monotone" 
-                    dataKey="systolic" 
-                    stroke="hsl(var(--chart-line))" 
+                  <Line
+                    type="monotone"
+                    dataKey="systolic"
+                    stroke="#3b82f6"
                     strokeWidth={2}
                     dot={false}
-                    name="Systolic BP"
+                    name="Systolic BP (mmHg)"
                   />
-                  <Line 
-                    type="monotone" 
-                    dataKey="diastolic" 
-                    stroke="hsl(var(--status-yellow))" 
+                  <Line
+                    type="monotone"
+                    dataKey="diastolic"
+                    stroke="#f59e0b"
                     strokeWidth={2}
                     dot={false}
-                    name="Diastolic BP"
+                    name="Diastolic BP (mmHg)"
                   />
                 </LineChart>
               </ResponsiveContainer>
@@ -258,28 +322,29 @@ export function RealtimeVitals({ patient, onBack }: RealtimeVitalsProps) {
                     stroke="hsl(var(--muted-foreground))"
                     fontSize={12}
                   />
-                  <Tooltip 
+                  <Tooltip
                     contentStyle={{
                       backgroundColor: 'hsl(var(--card))',
                       border: '1px solid hsl(var(--border))',
                       borderRadius: '8px'
                     }}
                   />
-                  <Line 
-                    type="monotone" 
-                    dataKey="respRate" 
-                    stroke="hsl(var(--chart-line))" 
+                  <Legend />
+                  <Line
+                    type="monotone"
+                    dataKey="respRate"
+                    stroke="#8b5cf6"
                     strokeWidth={2}
                     dot={false}
-                    name="Resp Rate"
+                    name="Respiratory Rate (/min)"
                   />
-                  <Line 
-                    type="monotone" 
-                    dataKey="spo2" 
-                    stroke="hsl(var(--status-green))" 
-                    strokeWidth={2}
+                  <Line
+                    type="monotone"
+                    dataKey="spo2"
+                    stroke="#10b981"
+                    strokeWidth={3}
                     dot={false}
-                    name="SpO2"
+                    name="SpO2 (%)"
                   />
                 </LineChart>
               </ResponsiveContainer>
@@ -303,20 +368,21 @@ export function RealtimeVitals({ patient, onBack }: RealtimeVitalsProps) {
                     stroke="hsl(var(--muted-foreground))"
                     fontSize={12}
                   />
-                  <Tooltip 
+                  <Tooltip
                     contentStyle={{
                       backgroundColor: 'hsl(var(--card))',
                       border: '1px solid hsl(var(--border))',
                       borderRadius: '8px'
                     }}
                   />
-                  <Line 
-                    type="monotone" 
-                    dataKey="bloodLoss" 
-                    stroke="hsl(var(--destructive))" 
-                    strokeWidth={2}
+                  <Legend />
+                  <Line
+                    type="monotone"
+                    dataKey="bloodLoss"
+                    stroke="#dc2626"
+                    strokeWidth={3}
                     dot={false}
-                    name="Blood Loss %"
+                    name="Blood Loss (%)"
                   />
                 </LineChart>
               </ResponsiveContainer>
@@ -340,17 +406,18 @@ export function RealtimeVitals({ patient, onBack }: RealtimeVitalsProps) {
                     stroke="hsl(var(--muted-foreground))"
                     fontSize={12}
                   />
-                  <Tooltip 
+                  <Tooltip
                     contentStyle={{
                       backgroundColor: 'hsl(var(--card))',
                       border: '1px solid hsl(var(--border))',
                       borderRadius: '8px'
                     }}
                   />
-                  <Line 
-                    type="monotone" 
-                    dataKey="trendScore" 
-                    stroke="hsl(var(--chart-trend))" 
+                  <Legend />
+                  <Line
+                    type="monotone"
+                    dataKey="trendScore"
+                    stroke="#6366f1"
                     strokeWidth={4}
                     dot={false}
                     name="Trend Score"
@@ -365,15 +432,20 @@ export function RealtimeVitals({ patient, onBack }: RealtimeVitalsProps) {
         <Card className="bg-card border-border">
           <CardContent className="p-4">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-sm text-muted-foreground">Simulation Progress</span>
               <span className="text-sm text-muted-foreground">
-                {currentIndex + 1} / {patient.vitals.length}
+                Simulation Progress (10x interpolated data, 100ms intervals)
+              </span>
+              <span className="text-sm text-muted-foreground">
+                {currentIndex + 1} / {patientVitals.length}
+                <span className="ml-2 text-xs">
+                  ({Math.round(((currentIndex + 1) / patientVitals.length) * 100)}%)
+                </span>
               </span>
             </div>
             <div className="w-full bg-muted rounded-full h-2">
               <div 
                 className="bg-primary h-2 rounded-full transition-all duration-300" 
-                style={{ width: `${((currentIndex + 1) / patient.vitals.length) * 100}%` }}
+                style={{ width: `${((currentIndex + 1) / patientVitals.length) * 100}%` }}
               ></div>
             </div>
           </CardContent>
