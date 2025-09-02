@@ -1,10 +1,12 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { QrCode, Activity, FileText, X, Plus } from "lucide-react";
-import { Patient, samplePatients } from "@/data/medicalData";
+import { QrCode, Activity, FileText, X, Plus, RefreshCw } from "lucide-react";
+import { Patient, generatePatientsFromCSV, defaultVitals, VitalSigns } from "@/data/medicalData";
 import { TCCCProvider } from "@/contexts/TCCCContext";
 import TCCCCardContainer from "./tccc/TCCCCardContainer";
+import { loadPatientVitalsByFilename } from "@/utils/csvLoader";
+import { computeSingleAlertColor } from "@/utils/alertDetection";
 import QRCode from "qrcode";
 
 interface PatientRosterProps {
@@ -13,14 +15,15 @@ interface PatientRosterProps {
 }
 
 export function PatientRoster({ onSelectPatient, onClose }: PatientRosterProps) {
-  const [patients, setPatients] = useState<Patient[]>(
-    // Sort patients by triage priority (1 = highest priority)
-    samplePatients.sort((a, b) => a.triagePriority - b.triagePriority)
-  );
+  const [patients, setPatients] = useState<Patient[]>([]);
   const [showTCCCCard, setShowTCCCCard] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [showPatientInfo, setShowPatientInfo] = useState(false);
   const [qrCodeData, setQrCodeData] = useState<{[key: string]: string}>({});
+  const [isLoading, setIsLoading] = useState(true);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [patientVitalsMap, setPatientVitalsMap] = useState<Map<string, VitalSigns[]>>(new Map());
+  const [currentVitalIndex, setCurrentVitalIndex] = useState<Map<string, number>>(new Map());
 
   const handleTCCCCardOpen = (patient: Patient) => {
     setSelectedPatient(patient);
@@ -32,12 +35,139 @@ export function PatientRoster({ onSelectPatient, onClose }: PatientRosterProps) 
     setSelectedPatient(null);
   };
 
-  // Generate QR codes for all patients on component mount
+  // Load patients dynamically from CSV files and their vitals data
+  useEffect(() => {
+    const loadPatients = async () => {
+      setIsLoading(true);
+      try {
+        const dynamicPatients = await generatePatientsFromCSV();
+        setPatients(dynamicPatients);
+
+        // Load vitals data for each patient
+        const vitalsMap = new Map<string, VitalSigns[]>();
+        const indexMap = new Map<string, number>();
+
+        for (const patient of dynamicPatients) {
+          if (patient.csvFilename) {
+            try {
+              const vitals = await loadPatientVitalsByFilename(patient.csvFilename);
+              if (vitals.length > 0) {
+                vitalsMap.set(patient.id, vitals);
+                indexMap.set(patient.id, 0); // Start at beginning
+              }
+            } catch (error) {
+              console.error(`Error loading vitals for ${patient.name}:`, error);
+            }
+          }
+        }
+
+        setPatientVitalsMap(vitalsMap);
+        setCurrentVitalIndex(indexMap);
+        setIsStreaming(true); // Start 5Hz streaming
+
+        console.log(`Loaded ${dynamicPatients.length} patients with vitals data`);
+      } catch (error) {
+        console.error('Error loading patients:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadPatients();
+  }, []);
+
+  // 5Hz streaming effect to update patient vitals and rankings
+  useEffect(() => {
+    if (!isStreaming || patientVitalsMap.size === 0) return;
+
+    const interval = setInterval(() => {
+      setCurrentVitalIndex(prevIndexMap => {
+        const newIndexMap = new Map(prevIndexMap);
+        let hasUpdates = false;
+
+        // Update each patient's current vital index
+        for (const [patientId, currentIndex] of prevIndexMap.entries()) {
+          const vitals = patientVitalsMap.get(patientId);
+          if (vitals && currentIndex < vitals.length - 1) {
+            newIndexMap.set(patientId, currentIndex + 1);
+            hasUpdates = true;
+          }
+        }
+
+        // Update patient statuses and rankings if there were changes
+        if (hasUpdates) {
+          setPatients(prevPatients => {
+            const updatedPatients = prevPatients.map(patient => {
+              const vitals = patientVitalsMap.get(patient.id);
+              const currentIndex = newIndexMap.get(patient.id) || 0;
+
+              if (vitals && vitals[currentIndex]) {
+                const currentVital = vitals[currentIndex];
+                const alertColor = currentVital.alert_color;
+
+                // Map alert colors to status and triage
+                let status: "green" | "yellow" | "red" = 'green';
+                let triageCategory = patient.triageCategory;
+                let triagePriority = patient.triagePriority;
+
+                switch (alertColor) {
+                  case 'brown':
+                    status = 'red';
+                    triageCategory = 'critical';
+                    triagePriority = 1;
+                    break;
+                  case 'red':
+                    status = 'red';
+                    triageCategory = 'immediate';
+                    triagePriority = 2;
+                    break;
+                  case 'orange':
+                    status = 'yellow';
+                    triageCategory = 'danger';
+                    triagePriority = 3;
+                    break;
+                  case 'yellow':
+                    status = 'yellow';
+                    triageCategory = 'warning';
+                    triagePriority = 4;
+                    break;
+                  case 'white':
+                    status = 'green';
+                    triageCategory = 'secondary';
+                    triagePriority = 5;
+                    break;
+                }
+
+                return {
+                  ...patient,
+                  status,
+                  triageCategory,
+                  triagePriority,
+                  vitals: [currentVital], // Update with current vital
+                  lastUpdated: new Date().toISOString()
+                };
+              }
+              return patient;
+            });
+
+            // Sort by triage priority (dynamic ranking)
+            return updatedPatients.sort((a, b) => a.triagePriority - b.triagePriority);
+          });
+        }
+
+        return newIndexMap;
+      });
+    }, 200); // 5Hz = 200ms intervals
+
+    return () => clearInterval(interval);
+  }, [isStreaming, patientVitalsMap]);
+
+  // Generate QR codes for all patients when patients change
   useEffect(() => {
     patients.forEach(patient => {
       generateQRCode(patient.id);
     });
-  }, []);  // Empty dependency array to run only once on mount
+  }, [patients]);
 
   const getTriageColor = (category: string) => {
     switch (category) {
@@ -63,6 +193,24 @@ export function PatientRoster({ onSelectPatient, onClose }: PatientRosterProps) 
     }
   };
 
+  // Get alert color indicator based on current vitals
+  const getAlertColorIndicator = (patient: Patient) => {
+    if (patient.vitals && patient.vitals.length > 0) {
+      const currentVital = patient.vitals[patient.vitals.length - 1];
+      const alertColor = currentVital.alert_color;
+
+      switch (alertColor) {
+        case 'brown': return 'bg-amber-800'; // Brown
+        case 'red': return 'bg-red-600'; // Red
+        case 'orange': return 'bg-orange-500'; // Orange
+        case 'yellow': return 'bg-yellow-500'; // Yellow
+        case 'white': return 'bg-white border border-gray-300'; // White
+        default: return 'bg-gray-500';
+      }
+    }
+    return 'bg-gray-500';
+  };
+
   const generateQRCode = async (patientId: string) => {
     try {
       const qrData = JSON.stringify({
@@ -83,6 +231,19 @@ export function PatientRoster({ onSelectPatient, onClose }: PatientRosterProps) 
     } catch (error) {
       console.error('Error generating QR code:', error);
       return null;
+    }
+  };
+
+  const refreshPatients = async () => {
+    setIsLoading(true);
+    try {
+      const dynamicPatients = await generatePatientsFromCSV();
+      setPatients(dynamicPatients);
+      console.log(`Refreshed ${dynamicPatients.length} patients from CSV files`);
+    } catch (error) {
+      console.error('Error refreshing patients:', error);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -107,18 +268,7 @@ export function PatientRoster({ onSelectPatient, onClose }: PatientRosterProps) 
       currentCondition: "Awaiting assessment",
       injuries: [],
       treatmentNotes: "",
-      vitals: [{
-        timestamp: new Date().toISOString(),
-        blood_loss_percent: 0,
-        pulse_bpm: 75,
-        systolic_mmHg: 120,
-        diastolic_mmHg: 80,
-        resp_rate_bpm: 16,
-        SpO2_percent: 98,
-        health_score: 100,
-        trend_score: 0,
-        alert_color: "green"
-      }]
+      vitals: defaultVitals
     };
 
     setPatients(prev => [...prev, newPatient].sort((a, b) => a.triagePriority - b.triagePriority));
@@ -144,6 +294,25 @@ export function PatientRoster({ onSelectPatient, onClose }: PatientRosterProps) 
             <p className="text-sm text-gray-400">Sorted by Triage Priority</p>
           </div>
           <div className="flex gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsStreaming(!isStreaming)}
+              className={`${isStreaming ? 'text-red-400 hover:bg-red-600' : 'text-green-400 hover:bg-green-600'} hover:text-white`}
+            >
+              <Activity className="w-4 h-4 mr-1" />
+              {isStreaming ? 'Stop 5Hz Stream' : 'Start 5Hz Stream'}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={refreshPatients}
+              disabled={isLoading}
+              className="text-purple-400 hover:text-white hover:bg-purple-600"
+            >
+              <RefreshCw className={`w-4 h-4 mr-1 ${isLoading ? 'animate-spin' : ''}`} />
+              {isLoading ? 'Loading...' : 'Refresh'}
+            </Button>
             <Button
               variant="ghost"
               size="sm"
@@ -206,7 +375,11 @@ export function PatientRoster({ onSelectPatient, onClose }: PatientRosterProps) 
                               </div>
                             </div>
                             <div>
-                              <div className="font-medium text-white">{patient.name}</div>
+                              <div className="font-medium text-white flex items-center gap-2">
+                                {patient.name}
+                                {/* Real-time alert color indicator */}
+                                <div className={`w-3 h-3 rounded-full ${getAlertColorIndicator(patient)} ${isStreaming ? 'animate-pulse' : ''}`} title="Real-time alert status"></div>
+                              </div>
                               <div className="text-sm text-gray-300">{patient.battleRoster}</div>
                               <div className="text-xs text-gray-500 font-mono">{patient.id.substring(0, 8)}...</div>
                             </div>

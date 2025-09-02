@@ -1,4 +1,5 @@
 import { VitalSigns } from "@/data/medicalData";
+import { computeAlertColors } from "@/utils/alertDetection";
 
 export interface CSVVitalData {
   patientId: string;
@@ -6,34 +7,66 @@ export interface CSVVitalData {
   vitals: VitalSigns[];
 }
 
-// CSV file mapping to patient UUIDs
-const CSV_PATIENT_MAPPING = {
-  "hemorrhage_alerts_tq.csv": "a1b2c3d4-e5f6-7890-abcd-ef1234567890", // Williams - Critical
-  "hemorrhage_alerts_tq copy.csv": "b2c3d4e5-f6g7-8901-bcde-f23456789012", // Johnson - Immediate
-  "hemorrhage_alerts_tq copy 2.csv": "c3d4e5f6-g7h8-9012-cdef-345678901234", // Martinez - Unknown
-  "hemorrhage_alerts_tq copy 3.csv": "d4e5f6g7-h8i9-0123-defg-456789012345", // Rodriguez - Danger
-  "hemorrhage_alerts_tq copy 4.csv": "e5f6g7h8-i9j0-1234-efgh-567890123456", // Thompson - Unknown
-  "hemorrhage_alerts_tq copy 5.csv": "f6g7h8i9-j0k1-2345-fghi-678901234567", // Chen - Warning
-  "hemorrhage_alerts_tq copy 6.csv": "g7h8i9j0-k1l2-3456-ghij-789012345678", // Dovzhenko - Secondary
-};
+export interface PatientProfile {
+  age: number;
+  gender: 'male' | 'female';
+  height: number;
+  weight: number;
+  filename: string;
+}
+
+// Function to get 5 CSV files for 5 patients (1:1 mapping)
+export async function getAvailableCSVFiles(): Promise<string[]> {
+  try {
+    // We have 5 unique CSV files, one per patient
+    const patientFiles = [
+      'individ_age20_sexF_h165_w60.csv',
+      'individ_age20_sexM_h165_w100.csv',
+      'individ_age20_sexM_h175_w80.csv',
+      'individ_age30_sexF_h175_w80.csv',
+      'individ_age30_sexM_h165_w80.csv'
+    ];
+
+    console.log(`Using ${patientFiles.length} unique CSV files for ${patientFiles.length} patients`);
+    return patientFiles;
+  } catch (error) {
+    console.error('Error getting CSV files:', error);
+    return [];
+  }
+}
+
+// Parse patient info from filename
+export function parsePatientFromFilename(filename: string): PatientProfile | null {
+  const match = filename.match(/individ_age(\d+)_sex([FM])_h(\d+)_w(\d+)\.csv/);
+  if (!match) return null;
+
+  const [, age, sex, height, weight] = match;
+  return {
+    age: parseInt(age),
+    gender: sex === 'F' ? 'female' : 'male',
+    height: parseInt(height),
+    weight: parseInt(weight),
+    filename
+  };
+}
 
 // Parse CSV line into VitalSigns object
 function parseCSVLine(line: string): VitalSigns | null {
   const parts = line.split(',');
-  if (parts.length !== 10) return null;
-  
+  if (parts.length < 10) return null;
+
   try {
     return {
       timestamp: parts[0],
-      blood_loss_percent: parseFloat(parts[1]),
-      pulse_bpm: parseInt(parts[2]),
-      systolic_mmHg: parseInt(parts[3]),
-      diastolic_mmHg: parseInt(parts[4]),
-      resp_rate_bpm: parseInt(parts[5]),
-      SpO2_percent: parseFloat(parts[6]),
-      health_score: parseFloat(parts[7]),
-      trend_score: parseFloat(parts[8]),
-      alert_color: parts[9] as "green" | "yellow" | "red"
+      blood_loss_percent: parseFloat(parts[1]) || 0,
+      pulse_bpm: parseInt(parts[2]) || 75,
+      systolic_mmHg: parseInt(parts[3]) || 120,
+      diastolic_mmHg: parseInt(parts[4]) || 80,
+      resp_rate_bpm: parseInt(parts[5]) || 16,
+      SpO2_percent: parseFloat(parts[6]) || 98,
+      health_score: parseFloat(parts[7]) || 100,
+      trend_score: parseFloat(parts[8]) || 0,
+      alert_color: (parts[15] || parts[9] || "green") as "green" | "yellow" | "red" // Use alert_color column (15) or fallback
     };
   } catch (error) {
     console.error('Error parsing CSV line:', line, error);
@@ -48,13 +81,13 @@ export async function loadCSVData(filename: string): Promise<VitalSigns[]> {
     if (!response.ok) {
       throw new Error(`Failed to load ${filename}: ${response.statusText}`);
     }
-    
+
     const csvText = await response.text();
     const lines = csvText.split('\n').filter(line => line.trim());
-    
+
     // Skip header line
     const dataLines = lines.slice(1);
-    
+
     const vitals: VitalSigns[] = [];
     for (const line of dataLines) {
       const vital = parseCSVLine(line.trim());
@@ -62,31 +95,52 @@ export async function loadCSVData(filename: string): Promise<VitalSigns[]> {
         vitals.push(vital);
       }
     }
-    
-    return vitals;
+
+    // Apply alert detection algorithm to compute proper alert colors
+    const vitalsWithAlerts = computeAlertColors(vitals);
+    console.log(`Processed ${vitalsWithAlerts.length} vitals with alert detection for ${filename}`);
+
+    return vitalsWithAlerts;
   } catch (error) {
     console.error(`Error loading CSV file ${filename}:`, error);
     return [];
   }
 }
 
-// Load all CSV data mapped to patient UUIDs
+// Load all CSV data for available files
 export async function loadAllPatientVitals(): Promise<Map<string, VitalSigns[]>> {
   const patientVitalsMap = new Map<string, VitalSigns[]>();
-  
-  for (const [filename, patientId] of Object.entries(CSV_PATIENT_MAPPING)) {
-    try {
-      const vitals = await loadCSVData(filename);
-      if (vitals.length > 0) {
-        patientVitalsMap.set(patientId, vitals);
-        console.log(`Loaded ${vitals.length} vital signs for patient ${patientId} from ${filename}`);
+
+  try {
+    const csvFiles = await getAvailableCSVFiles();
+
+    for (const filename of csvFiles) {
+      try {
+        const vitals = await loadCSVData(filename);
+        if (vitals.length > 0) {
+          // Use filename as key for now, will be mapped to patient IDs later
+          patientVitalsMap.set(filename, vitals);
+          console.log(`Loaded ${vitals.length} vital signs from ${filename}`);
+        }
+      } catch (error) {
+        console.error(`Failed to load vitals from ${filename}:`, error);
       }
-    } catch (error) {
-      console.error(`Failed to load vitals for patient ${patientId} from ${filename}:`, error);
     }
+  } catch (error) {
+    console.error('Error loading patient vitals:', error);
   }
-  
+
   return patientVitalsMap;
+}
+
+// Load vitals for a specific patient by filename
+export async function loadPatientVitalsByFilename(filename: string): Promise<VitalSigns[]> {
+  try {
+    return await loadCSVData(filename);
+  } catch (error) {
+    console.error(`Error loading vitals for ${filename}:`, error);
+    return [];
+  }
 }
 
 // Get patient vitals by UUID

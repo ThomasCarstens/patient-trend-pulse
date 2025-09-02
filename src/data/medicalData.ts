@@ -8,7 +8,7 @@ export interface VitalSigns {
   SpO2_percent: number;
   health_score: number;
   trend_score: number;
-  alert_color: 'green' | 'yellow' | 'red';
+  alert_color: 'white' | 'yellow' | 'orange' | 'red' | 'brown';
 }
 
 export type TriageCategory = 'critical' | 'immediate' | 'danger' | 'warning' | 'secondary' | 'unknown';
@@ -36,6 +36,7 @@ export interface Patient {
   currentCondition?: string;
   injuries?: string[];
   treatmentNotes?: string;
+  csvFilename?: string; // Optional CSV filename for data loading
 }
 
 // Linear interpolation function
@@ -132,8 +133,106 @@ export const defaultVitals: VitalSigns[] = [{
   SpO2_percent: 98,
   health_score: 100,
   trend_score: 0,
-  alert_color: "green"
+  alert_color: "white"
 }];
+
+// Generate patients dynamically from CSV files
+import { getAvailableCSVFiles, parsePatientFromFilename } from "@/utils/csvLoader";
+
+// Generate a patient name based on demographics
+function generatePatientName(age: number, gender: 'male' | 'female', index: number): string {
+  const maleNames = ['Williams', 'Johnson', 'Martinez', 'Rodriguez', 'Thompson', 'Chen', 'Dovzhenko', 'Smith', 'Brown', 'Davis', 'Miller', 'Wilson', 'Moore', 'Taylor', 'Anderson', 'Thomas', 'Jackson', 'White', 'Harris', 'Martin'];
+  const femaleNames = ['Sarah', 'Emily', 'Jessica', 'Ashley', 'Amanda', 'Jennifer', 'Michelle', 'Lisa', 'Karen', 'Nancy', 'Betty', 'Helen', 'Sandra', 'Donna', 'Carol', 'Ruth', 'Sharon', 'Michelle', 'Laura', 'Sarah'];
+
+  const names = gender === 'male' ? maleNames : femaleNames;
+  return names[index % names.length];
+}
+
+// Generate triage category based on patient characteristics
+function generateTriageCategory(age: number, weight: number): { category: TriageCategory; priority: number; status: string } {
+  // Higher risk for older patients and extreme weights
+  const riskScore = (age > 60 ? 2 : age > 40 ? 1 : 0) + (weight < 70 || weight > 90 ? 1 : 0);
+
+  if (riskScore >= 2) {
+    return Math.random() < 0.3 ?
+      { category: 'critical', priority: 1, status: 'red' } :
+      { category: 'immediate', priority: 2, status: 'red' };
+  } else if (riskScore === 1) {
+    return Math.random() < 0.4 ?
+      { category: 'danger', priority: 3, status: 'yellow' } :
+      { category: 'warning', priority: 4, status: 'yellow' };
+  } else {
+    return Math.random() < 0.2 ?
+      { category: 'unknown', priority: 6, status: 'yellow' } :
+      { category: 'secondary', priority: 5, status: 'green' };
+  }
+}
+
+// Generate dynamic patients based on CSV files
+export async function generatePatientsFromCSV(): Promise<Patient[]> {
+  try {
+    const csvFiles = await getAvailableCSVFiles();
+    const patients: Patient[] = [];
+
+    // Create 5 patients, each with their own unique CSV file
+    for (let i = 0; i < csvFiles.length; i++) {
+      const filename = csvFiles[i];
+      const profile = parsePatientFromFilename(filename);
+
+      if (!profile) continue;
+
+      const patientId = `patient-${i + 1}-${Date.now()}`;
+      const name = generatePatientName(profile.age, profile.gender, i);
+      const triage = generateTriageCategory(profile.age, profile.weight);
+
+      const patient: Patient = {
+        id: patientId,
+        name,
+        battleRoster: `TV-${String(i + 1).padStart(3, '0')}`,
+        age: profile.age, // Use actual age from CSV filename
+        bloodType: ['O+', 'O-', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-'][i % 8],
+        allergies: Math.random() < 0.3 ? ['Penicillin', 'Latex', 'Shellfish'][Math.floor(Math.random() * 3)] ? [['Penicillin', 'Latex', 'Shellfish'][Math.floor(Math.random() * 3)]] : [] : [],
+        medications: Math.random() < 0.4 ? [['Aspirin', 'Ibuprofen', 'Acetaminophen'][Math.floor(Math.random() * 3)]] : [],
+        lastUpdated: new Date().toISOString(),
+        status: triage.status,
+        triageCategory: triage.category,
+        triagePriority: triage.priority,
+        gender: profile.gender, // Use actual gender from CSV filename
+        serviceNumber: `${Math.floor(Math.random() * 900) + 100}-${Math.floor(Math.random() * 90) + 10}-${Math.floor(Math.random() * 9000) + 1000}`,
+        nextOfKin: Math.random() < 0.8 ? `Emergency Contact ${i + 1}` : 'Unknown',
+        medicalHistory: Math.random() < 0.5 ? ['Previous injury', 'Chronic condition'][Math.floor(Math.random() * 2)] ? [['Previous injury', 'Chronic condition'][Math.floor(Math.random() * 2)]] : [] : [],
+        currentCondition: triage.category === 'unknown' ? 'Awaiting assessment' :
+                         triage.category === 'critical' ? 'Critical condition requiring immediate intervention' :
+                         triage.category === 'immediate' ? 'Serious injuries requiring urgent care' :
+                         triage.category === 'danger' ? 'Moderate injuries, stable but monitoring required' :
+                         triage.category === 'warning' ? 'Minor injuries, ambulatory' :
+                         'Walking wounded, minimal care required',
+        injuries: triage.category === 'unknown' ? ['Unknown injuries'] :
+                 triage.category === 'critical' ? ['Severe trauma', 'Internal bleeding'] :
+                 triage.category === 'immediate' ? ['Significant wounds', 'Possible fractures'] :
+                 triage.category === 'danger' ? ['Moderate lacerations', 'Bruising'] :
+                 triage.category === 'warning' ? ['Minor cuts', 'Abrasions'] :
+                 ['Superficial wounds'],
+        treatmentNotes: triage.category === 'unknown' ? '' :
+                       triage.category === 'critical' ? 'Requires immediate surgical intervention' :
+                       triage.category === 'immediate' ? 'Stabilized, requires continued monitoring' :
+                       triage.category === 'danger' ? 'Wounds treated, stable condition' :
+                       triage.category === 'warning' ? 'Basic first aid applied' :
+                       'Cleared for light duty',
+        vitals: defaultVitals,
+        csvFilename: filename // Store the associated CSV filename
+      };
+
+      patients.push(patient);
+    }
+
+    // Sort by triage priority
+    return patients.sort((a, b) => a.triagePriority - b.triagePriority);
+  } catch (error) {
+    console.error('Error generating patients from CSV:', error);
+    return [];
+  }
+}
 
 export const samplePatients: Patient[] = [
   {
