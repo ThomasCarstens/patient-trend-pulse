@@ -37,6 +37,8 @@ export interface Patient {
   injuries?: string[];
   treatmentNotes?: string;
   csvFilename?: string; // Optional CSV filename for data loading
+  treatmentLastChecked?: string; // ISO timestamp of last treatment check
+  consciousnessLastChecked?: string; // ISO timestamp of last consciousness check
 }
 
 // Linear interpolation function
@@ -139,13 +141,28 @@ export const defaultVitals: VitalSigns[] = [{
 // Generate patients dynamically from CSV files
 import { getAvailableCSVFiles, parsePatientFromFilename } from "@/utils/csvLoader";
 
-// Generate a patient name based on demographics
+// Generate a patient name based on demographics with specific positioning for Petrenko and Tkachenko
 function generatePatientName(age: number, gender: 'male' | 'female', index: number): string {
-  const maleNames = ['Williams', 'Johnson', 'Martinez', 'Rodriguez', 'Thompson', 'Chen', 'Dovzhenko', 'Smith', 'Brown', 'Davis', 'Miller', 'Wilson', 'Moore', 'Taylor', 'Anderson', 'Thomas', 'Jackson', 'White', 'Harris', 'Martin'];
-  const femaleNames = ['Sarah', 'Emily', 'Jessica', 'Ashley', 'Amanda', 'Jennifer', 'Michelle', 'Lisa', 'Karen', 'Nancy', 'Betty', 'Helen', 'Sandra', 'Donna', 'Carol', 'Ruth', 'Sharon', 'Michelle', 'Laura', 'Sarah'];
+  // Specific name assignments to ensure Petrenko is row 3 (index 2) and Tkachenko is row 5 (index 4)
+  const specificNames = [
+    'Kovalenko',  // Row 1 (Priority 1 - Critical)
+    'Bondarenko', // Row 2 (Priority 2 - Immediate)
+    'Petrenko',   // Row 3 (Priority 3 - Danger)
+    'Shevchenko', // Row 4 (Priority 4 - Warning)
+    'Tkachenko'   // Row 5 (Priority 5 - Secondary)
+  ];
 
-  const names = gender === 'male' ? maleNames : femaleNames;
-  return names[index % names.length];
+  // Return specific name for the index, or fallback to cycling through names
+  if (index < specificNames.length) {
+    return specificNames[index];
+  }
+
+  // Fallback for any additional patients
+  const maleSurnames = ['Boyko', 'Kravchenko', 'Kovalchuk', 'Oliynyk', 'Shevchuk', 'Polishchuk', 'Lysenko', 'Savchenko', 'Rudenko', 'Marchenko', 'Moroz', 'Koval', 'Pavlenko', 'Davidenko', 'Melnyk'];
+  const femaleSurnames = ['Boyko', 'Kravchenko', 'Kovalchuk', 'Oliynyk', 'Shevchuk', 'Polishchuk', 'Lysenko', 'Savchenko', 'Rudenko', 'Marchenko', 'Moroz', 'Koval', 'Pavlenko', 'Davidenko', 'Melnyk'];
+
+  const surnames = gender === 'male' ? maleSurnames : femaleSurnames;
+  return surnames[index % surnames.length];
 }
 
 // Generate triage category based on patient characteristics
@@ -174,16 +191,26 @@ export async function generatePatientsFromCSV(): Promise<Patient[]> {
     const csvFiles = await getAvailableCSVFiles();
     const patients: Patient[] = [];
 
-    // Create 5 patients, each with their own unique CSV file
-    for (let i = 0; i < csvFiles.length; i++) {
-      const filename = csvFiles[i];
-      const profile = parsePatientFromFilename(filename);
+    // Define specific patient assignments with their CSV files and triage
+    const patientAssignments = [
+      { name: 'Petrenko', csvFile: csvFiles[0], category: 'danger', priority: 3, status: 'yellow' },
+      { name: 'Kovalenko', csvFile: csvFiles[2], category: 'critical', priority: 1, status: 'red' },
+      { name: 'Bondarenko', csvFile: csvFiles[1], category: 'immediate', priority: 2, status: 'red' },
+      
+      { name: 'Shevchenko', csvFile: csvFiles[3], category: 'warning', priority: 4, status: 'yellow' },
+      { name: 'Tkachenko', csvFile: csvFiles[4], category: 'secondary', priority: 5, status: 'green' }
+    ];
+
+    // Create 5 patients with specific name-to-CSV mappings
+    for (let i = 0; i < patientAssignments.length; i++) {
+      const assignment = patientAssignments[i];
+      const profile = parsePatientFromFilename(assignment.csvFile);
 
       if (!profile) continue;
 
       const patientId = `patient-${i + 1}-${Date.now()}`;
-      const name = generatePatientName(profile.age, profile.gender, i);
-      const triage = generateTriageCategory(profile.age, profile.weight);
+      const name = assignment.name;
+      const triage = { category: assignment.category, priority: assignment.priority, status: assignment.status };
 
       const patient: Patient = {
         id: patientId,
@@ -194,8 +221,8 @@ export async function generatePatientsFromCSV(): Promise<Patient[]> {
         allergies: Math.random() < 0.3 ? ['Penicillin', 'Latex', 'Shellfish'][Math.floor(Math.random() * 3)] ? [['Penicillin', 'Latex', 'Shellfish'][Math.floor(Math.random() * 3)]] : [] : [],
         medications: Math.random() < 0.4 ? [['Aspirin', 'Ibuprofen', 'Acetaminophen'][Math.floor(Math.random() * 3)]] : [],
         lastUpdated: new Date().toISOString(),
-        status: triage.status,
-        triageCategory: triage.category,
+        status: triage.status as 'green' | 'yellow' | 'red',
+        triageCategory: triage.category as TriageCategory,
         triagePriority: triage.priority,
         gender: profile.gender, // Use actual gender from CSV filename
         serviceNumber: `${Math.floor(Math.random() * 900) + 100}-${Math.floor(Math.random() * 90) + 10}-${Math.floor(Math.random() * 9000) + 1000}`,
@@ -220,7 +247,9 @@ export async function generatePatientsFromCSV(): Promise<Patient[]> {
                        triage.category === 'warning' ? 'Basic first aid applied' :
                        'Cleared for light duty',
         vitals: defaultVitals,
-        csvFilename: filename // Store the associated CSV filename
+        csvFilename: assignment.csvFile, // Store the specific CSV filename for this patient
+        treatmentLastChecked: new Date(Date.now() - Math.random() * 120 * 60 * 1000).toISOString(), // Random time within last 2 hours
+        consciousnessLastChecked: new Date(Date.now() - Math.random() * 60 * 60 * 1000).toISOString() // Random time within last hour
       };
 
       patients.push(patient);
@@ -237,7 +266,7 @@ export async function generatePatientsFromCSV(): Promise<Patient[]> {
 export const samplePatients: Patient[] = [
   {
     id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-    name: "Williams",
+    name: "Petrenko",
     battleRoster: "TV-005",
     age: 30,
     bloodType: "O-",
@@ -249,7 +278,7 @@ export const samplePatients: Patient[] = [
     triagePriority: 1,
     gender: "male",
     serviceNumber: "123-45-6789",
-    nextOfKin: "Sarah Williams (Wife)",
+    nextOfKin: "Oksana Petrenko (Wife)",
     medicalHistory: ["Hypertension", "Previous concussion"],
     currentCondition: "Severe hemorrhagic shock, penetrating abdominal trauma",
     injuries: ["GSW to abdomen", "Suspected internal bleeding", "Class III hemorrhage"],
